@@ -1,4 +1,4 @@
-import asyncio
+import io
 import logging
 import math
 import os
@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from PIL import Image, UnidentifiedImageError
 
 from ai_engine import analyze_land
 from pdf_generator import generate_feasibility_report
@@ -20,12 +21,7 @@ BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 REPORT_DIR = BASE_DIR / "reports"
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
-ALLOWED_SIGNATURES = {
-    ".jpg": (b"\xff\xd8\xff",),
-    ".jpeg": (b"\xff\xd8\xff",),
-    ".png": (b"\x89PNG\r\n\x1a\n",),
-    ".webp": (b"RIFF",),
-}
+ALLOWED_FORMATS = {".jpg": "JPEG", ".jpeg": "JPEG", ".png": "PNG", ".webp": "WEBP"}
 REPORT_NAME_RE = re.compile(r"^[0-9a-f]{32}\.pdf$")
 
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -34,7 +30,7 @@ REPORT_DIR.mkdir(parents=True, exist_ok=True)
 app = FastAPI(
     title="AI İnşaat Analiz API",
     version="1.1.0",
-    description="Ön fizibilite prototipi; resmi imar görüşü veya yatırım tavsiyesi değildir.",
+    description="Ön fizibilite prototipi; resmî imar görüşü veya yatırım tavsiyesi değildir.",
 )
 
 allowed_origins = [
@@ -51,14 +47,20 @@ app.add_middleware(
 )
 
 
-def _is_allowed_image(filename: str, data: bytes) -> bool:
+def _validate_image(filename: str, data: bytes) -> None:
     extension = Path(filename or "").suffix.lower()
-    signatures = ALLOWED_SIGNATURES.get(extension)
-    if not signatures or not data:
-        return False
-    if extension == ".webp":
-        return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
-    return any(data.startswith(signature) for signature in signatures)
+    expected_format = ALLOWED_FORMATS.get(extension)
+    if not expected_format or not data:
+        raise HTTPException(status_code=415, detail="Yalnızca JPG, PNG veya WebP görselleri kabul edilir.")
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            if image.format != expected_format:
+                raise HTTPException(status_code=415, detail="Dosya uzantısı ve görsel biçimi eşleşmiyor.")
+            image.verify()
+    except HTTPException:
+        raise
+    except (UnidentifiedImageError, OSError, ValueError):
+        raise HTTPException(status_code=415, detail="Dosya geçerli bir görsel değil.")
 
 
 @app.get("/health")
@@ -78,11 +80,8 @@ async def process_land(
     if not math.isfinite(area_sqm) or area_sqm <= 0 or area_sqm > 100_000_000:
         raise HTTPException(status_code=422, detail="Arsa alanı 0 ile 100.000.000 m² arasında geçerli bir sayı olmalıdır.")
 
-    suffix = Path(image.filename or "").suffix.lower()
-    if suffix not in ALLOWED_SIGNATURES:
-        raise HTTPException(status_code=415, detail="Yalnızca JPG, PNG veya WebP görselleri kabul edilir.")
-
     image_id = uuid.uuid4().hex
+    suffix = Path(image.filename or "").suffix.lower()
     image_path = UPLOAD_DIR / f"{image_id}{suffix}"
     report_path = REPORT_DIR / f"{image_id}.pdf"
 
@@ -90,8 +89,7 @@ async def process_land(
         data = await image.read(MAX_UPLOAD_BYTES + 1)
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(status_code=413, detail="Görsel en fazla 10 MB olabilir.")
-        if not _is_allowed_image(image.filename or "", data):
-            raise HTTPException(status_code=415, detail="Dosya uzantısı ve gerçek görsel biçimi eşleşmiyor.")
+        _validate_image(image.filename or "", data)
 
         image_path.write_bytes(data)
         analysis_result = await analyze_land(str(image_path), location, area_sqm)
