@@ -1,91 +1,118 @@
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
-from reportlab.lib import colors
 import datetime
+from pathlib import Path
+
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.pdfgen import canvas
+
+
+def _wrapped_lines(text: str, font: str, size: int, max_width: float):
+    words = str(text).split()
+    lines, current = [], ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if current and stringWidth(candidate, font, size) > max_width:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines
+
 
 def generate_feasibility_report(data: dict, output_path: str):
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     c = canvas.Canvas(output_path, pagesize=A4)
     width, height = A4
-    
-    # Başlık ve Tasarım
-    c.setFillColor(colors.HexColor("#1A365D")) # Koyu mavi kurumsal renk
-    c.rect(0, height - 100, width, 100, fill=1, stroke=0)
-    
+    margin = 42
+    content_width = width - margin * 2
+
+    c.setFillColor(colors.HexColor("#1A365D"))
+    c.rect(0, height - 92, width, 92, fill=1, stroke=0)
     c.setFillColor(colors.white)
-    c.setFont("Helvetica-Bold", 24)
-    c.drawString(40, height - 60, "AI ARSA FIZIBILITE RAPORU")
-    
-    c.setFont("Helvetica", 10)
-    c.drawString(width - 150, height - 60, f"Tarih: {datetime.date.today()}")
-    
-    # İçerik Alanı
-    c.setFillColor(colors.black)
-    
-    y = height - 150
-    
-    # Arsa ve İmar Bilgileri
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(40, y, "1. Arsa ve Imar Analizi")
-    y -= 30
-    
-    c.setFont("Helvetica", 12)
-    c.drawString(50, y, f"Lokasyon: {data['location']}")
-    y -= 20
-    c.drawString(50, y, f"Arsa Alani: {data['area_sqm']} m2")
-    y -= 20
-    c.drawString(50, y, f"Emsal (KAKS): {data['zoning_info']['emsal']}")
-    y -= 20
-    c.drawString(50, y, f"TAKS: {data['zoning_info']['taks']}")
-    y -= 20
-    c.drawString(50, y, f"Maksimum Kat: {data['zoning_info']['max_kat']} Kat")
-    y -= 40
-    
-    # Kapasite
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(40, y, "2. Yapi Kapasitesi")
-    y -= 30
-    
-    c.setFont("Helvetica", 12)
-    c.drawString(50, y, f"Taban Alani: {data['capacity']['taban_alani_m2']} m2")
-    y -= 20
-    c.drawString(50, y, f"Toplam Insaat Alani: {data['capacity']['toplam_insaat_alani_m2']} m2")
-    y -= 20
-    c.drawString(50, y, f"Tahmini Daire Sayisi (100m2): {data['capacity']['tahmini_daire_sayisi']} Adet")
-    y -= 40
-    
-    # Finansal
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(40, y, "3. Tahmini Maliyet & Finansal Rapor")
-    y -= 30
-    
-    def format_money(val):
-        return f"{val:,.0f} TL".replace(",", ".")
-        
-    c.setFont("Helvetica", 12)
-    c.drawString(50, y, f"Tahmini Insaat Maliyeti: {format_money(data['financials']['toplam_maliyet_tl'])}")
-    y -= 20
-    c.drawString(50, y, f"Tahmini Satis Geliri: {format_money(data['financials']['toplam_gelir_tl'])}")
-    y -= 20
-    
-    c.setFont("Helvetica-Bold", 14)
-    c.setFillColor(colors.HexColor("#2F855A")) # Yeşil
-    c.drawString(50, y, f"Olası Kar Marji: {format_money(data['financials']['tahmini_kar_tl'])}")
-    c.setFillColor(colors.black)
-    y -= 40
-    
-    # Konseptler
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(40, y, "4. Yapay Zeka Konsept Onerileri")
-    y -= 30
-    
-    c.setFont("Helvetica", 12)
-    for concept in data['concepts']:
-        c.drawString(50, y, f"- {concept}")
-        y -= 20
-        
-    # Alt bilgi
-    c.setFont("Helvetica-Oblique", 10)
-    c.setFillColor(colors.gray)
-    c.drawString(40, 40, "Bu rapor AI Insaat Analiz Motoru tarafindan uretilmistir. Degerler yaklasik ve simulasyondur.")
+    c.setFont("Helvetica-Bold", 20)
+    c.drawString(margin, height - 47, "AI ARSA ON FIZIBILITE RAPORU")
+    c.setFont("Helvetica", 9)
+    c.drawRightString(width - margin, height - 70, f"Tarih: {datetime.date.today().isoformat()}")
+
+    y = height - 118
+
+    def ensure_space(required=36):
+        nonlocal y
+        if y - required < 58:
+            c.showPage()
+            y = height - 55
+
+    def heading(text):
+        nonlocal y
+        ensure_space(32)
+        c.setFillColor(colors.HexColor("#1A365D"))
+        c.setFont("Helvetica-Bold", 13)
+        c.drawString(margin, y, text)
+        y -= 22
+
+    def line(label, value, color=colors.black):
+        nonlocal y
+        text = f"{label}: {value}"
+        lines = _wrapped_lines(text, "Helvetica", 10, content_width - 10)
+        ensure_space(14 * len(lines) + 4)
+        c.setFillColor(color)
+        c.setFont("Helvetica", 10)
+        for item in lines:
+            c.drawString(margin + 8, y, item)
+            y -= 14
+        y -= 2
+
+    heading("1. Arsa ve konum")
+    line("Lokasyon", data.get("location", "Belirtilmedi"))
+    line("Arsa alani", f"{data.get('area_sqm', 0):,.2f} m2")
+    line("Konum eslestirme", data.get("api_status", "Dogrulanmadi"))
+
+    heading("2. Imar varsayimlari")
+    zoning = data.get("zoning_info", {})
+    line("Emsal / KAKS (varsayim)", zoning.get("emsal", "—"))
+    line("TAKS (varsayim)", zoning.get("taks", "—"))
+    line("Alan oranindan tahmini kat", zoning.get("max_kat", "—"))
+    line("Not", zoning.get("note", "Resmi imar bilgisi degildir."))
+
+    heading("3. Alan ve kapasite tahmini")
+    capacity = data.get("capacity", {})
+    line("Taban alani", f"{capacity.get('taban_alani_m2', 0):,.2f} m2")
+    line("Toplam insaat alani", f"{capacity.get('toplam_insaat_alani_m2', 0):,.2f} m2")
+    line("100 m2 bazinda tahmini daire", capacity.get("tahmini_daire_sayisi", "—"))
+
+    heading("4. Finansal senaryo (canli fiyat degildir)")
+    financials = data.get("financials", {})
+    def money(value):
+        return f"{float(value or 0):,.0f} TL".replace(",", ".")
+    line("Tahmini insaat maliyeti", money(financials.get("toplam_maliyet_tl")))
+    line("Tahmini satis geliri", money(financials.get("toplam_gelir_tl")))
+    line("Tahmini fark (kar degildir)", money(financials.get("tahmini_kar_tl")), colors.HexColor("#2F855A"))
+
+    concepts = data.get("concepts", [])
+    if concepts:
+        heading("5. Taslak konsept fikirleri")
+        for concept in concepts:
+            line("Fikir", concept)
+
+    ensure_space(68)
+    y -= 4
+    c.setFillColor(colors.HexColor("#9B2C2C"))
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(margin, y, "ONEMLI SINIRLAMA")
+    y -= 13
+    c.setFont("Helvetica", 8)
+    c.setFillColor(colors.HexColor("#4A5568"))
+    disclaimer = (
+        "Bu belge otomatik on fizibilite prototipidir. Gorsel analiz edilmemis; resmi imar, "
+        "parsel siniri, plan notu, ruhsat, maliyet veya piyasa fiyati dogrulanmamistir. "
+        "Rakamlar kod icindeki varsayimlardan uretilmistir; yatirim veya ruhsat karari icin kullanmayin."
+    )
+    for item in _wrapped_lines(disclaimer, "Helvetica", 8, content_width):
+        ensure_space(11)
+        c.drawString(margin, y, item)
+        y -= 11
 
     c.save()
