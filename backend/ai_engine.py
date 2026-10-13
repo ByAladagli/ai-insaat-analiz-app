@@ -6,7 +6,6 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # Demonstration assumptions only. These are not live market quotes or official zoning data.
-# Replace with a dated, source-attributed data service before using this for real decisions.
 REGIONAL_DATA = {
     "istanbul": {
         "kadikoy": {"m2_insaat_maliyeti": 25000, "m2_satis_fiyati": 120000, "emsal": 2.07},
@@ -33,7 +32,6 @@ async def fetch_geodata_from_api(location_query: str):
     if not user_agent:
         logger.info("NOMINATIM_USER_AGENT ayarlanmamış; geocoding atlandı.")
         return None
-
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0)) as client:
             response = await client.get(
@@ -68,8 +66,8 @@ def get_regional_data(location_str: str):
 
 
 async def analyze_land(image_path: str, location: str, area_sqm: float):
-    # The uploaded image is currently validated and stored temporarily, but no vision model
-    # or cadastral/geospatial image measurement is integrated yet.
+    # The image is validated and temporarily stored, but no vision model or parcel
+    # boundary measurement is integrated yet. Do not represent it as image analysis.
     if not os.path.isfile(image_path):
         raise ValueError("Görsel dosyası bulunamadı.")
     if area_sqm <= 0:
@@ -78,7 +76,7 @@ async def analyze_land(image_path: str, location: str, area_sqm: float):
     geo_data = await fetch_geodata_from_api(location)
     region_info = get_regional_data(location)
     emsal = region_info["emsal"]
-    taks = 0.40  # Explicit default assumption, not parcel-specific planning data.
+    taks = 0.40  # Default assumption, not parcel-specific planning data.
     base_area = area_sqm * taks
     total_construction_area = area_sqm * emsal
     estimated_units = int(total_construction_area / 100)
@@ -86,6 +84,19 @@ async def analyze_land(image_path: str, location: str, area_sqm: float):
     construction_cost = total_construction_area * region_info["m2_insaat_maliyeti"]
     sales_revenue = total_construction_area * region_info["m2_satis_fiyati"]
 
+    zoning_info = {
+        "emsal": emsal,
+        "taks": taks,
+        "max_kat": estimated_floors,  # Legacy UI/PDF field; clearly labelled as an estimate.
+        "estimated_floors_from_area_ratio": estimated_floors,
+        "note": "Kat sayısı yalnızca alan oranı varsayımıdır; yükseklik/plan notu kontrolü değildir.",
+    }
+    capacity = {
+        "taban_alani_m2": round(base_area, 2),
+        "toplam_insaat_alani_m2": round(total_construction_area, 2),
+        "tahmini_daire_sayisi": estimated_units,  # Legacy UI/PDF compatibility.
+        "tahmini_daire_sayisi_100m2": estimated_units,
+    }
     return {
         "location": geo_data.get("display_name", location) if geo_data else location,
         "coordinates": {"lat": geo_data.get("lat"), "lon": geo_data.get("lon")} if geo_data else None,
@@ -101,17 +112,8 @@ async def analyze_land(image_path: str, location: str, area_sqm: float):
             "currency": "TRY",
         },
         "area_sqm": area_sqm,
-        "zoning_info": {
-            "emsal": emsal,
-            "taks": taks,
-            "estimated_floors_from_area_ratio": estimated_floors,
-            "note": "Kat sayısı yalnızca alan oranı varsayımıdır; yükseklik/plan notu kontrolü değildir.",
-        },
-        "capacity": {
-            "taban_alani_m2": round(base_area, 2),
-            "toplam_insaat_alani_m2": round(total_construction_area, 2),
-            "tahmini_daire_sayisi_100m2": estimated_units,
-        },
+        "zoning_info": zoning_info,
+        "capacity": capacity,
         "financials": {
             "toplam_maliyet_tl": round(construction_cost, 2),
             "toplam_gelir_tl": round(sales_revenue, 2),
